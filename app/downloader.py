@@ -32,15 +32,15 @@ def _write_asset_overrides(
     entries: list[str] = []
 
     if checkpoint_url:
-        entries.append(f"- name: {MODEL_NAME}\n  checkpoint: '{checkpoint_url}'")
+        entries.append(f"name: {MODEL_NAME}@user\ncheckpoint: '{checkpoint_url}'")
         logger.info("Overriding %s checkpoint URL → %s", MODEL_NAME, checkpoint_url)
 
     if tokenizer_name and tokenizer_url:
-        entries.append(f"- name: {tokenizer_name}\n  tokenizer: '{tokenizer_url}'")
+        entries.append(f"name: {tokenizer_name}@user\ntokenizer: '{tokenizer_url}'")
         logger.info("Overriding %s tokenizer URL → %s", tokenizer_name, tokenizer_url)
 
     if entries:
-        _OVERRIDE_FILE.write_text("\n".join(entries) + "\n")
+        _OVERRIDE_FILE.write_text("---\n" + "\n---\n".join(entries) + "\n")
         logger.debug("Wrote asset overrides to %s", _OVERRIDE_FILE)
 
 
