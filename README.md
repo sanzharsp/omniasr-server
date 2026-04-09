@@ -28,11 +28,11 @@ This repo builds the image with CUDA 12.6 and PyTorch 2.8.0. To build against a 
 The [`build.sh`](build.sh) script is a good place to start your own builds:
 
 ```bash
-# Build with default model
+# Build
 bash build.sh
 
-# Build with variant model, tag as latest, and push
-MODEL_NAME=omniASR_LLM_1B_v2 LATEST_TAG=true PUSH=true bash build.sh
+# Build, tag as latest, and push
+LATEST_TAG=true PUSH=true bash build.sh
 
 # Build with namespace
 NAMESPACE=abc bash build.sh
@@ -43,25 +43,24 @@ NAMESPACE=abc PUSH=true bash build.sh
 
 **Build script options:**
 
-- `MODEL_NAME` - Name of the model to build (default: `omniASR_LLM_300M_v2`)
 - `NAMESPACE` - Namespace/registry prefix for the image name (optional). If provided, images will be tagged as `NAMESPACE/omniasr-server`. If not provided, defaults to `omniasr-server`
 - `LATEST_TAG` - Set to `"true"` to also tag the image as `latest` (default: `false`)
 - `PUSH` - Set to `"true"` to push the image to the registry after building (default: `false`)
 
-The image will be tagged as `<namespace>/omniasr-server:cu126-pt280-<model-suffix>` where the model suffix is derived from the model name (e.g., `omniASR_LLM_300M_v2` becomes `llm-300m-v2`). If no namespace is provided, it defaults to `omniasr-server:cu126-pt280-<model-suffix>`.
+The image will be tagged as `<namespace>/omniasr-server:cu126-pt280`. Because the image ships without weights, a single image works for all model variants.
 
 ### Manual build
 
 You can also build manually using Docker:
 
 ```bash
-docker build --build-arg MODEL_NAME=omniASR_LLM_300M_v2 -t omniasr-server .
+docker build -t omniasr-server .
 ```
 
 Then, run with GPU support:
 
 ```bash
-docker run --gpus all -p 8080:8080 omniasr-server
+docker run --gpus all -p 8080:8080 -e MODEL_NAME=omniASR_CTC_300M_v2 omniasr-server
 ```
 
 I'm open to 💡 on how to streamline the build process so I can build for multiple CUDA and PyTorch versions.
@@ -137,6 +136,8 @@ See the [openai_client.py](scripts/openai_client.py) code. It's pretty straightf
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MODEL_NAME` | `omniASR_CTC_300M_v2` | Model to use for transcription |
+| `MODEL_CHECKPOINT_URL` | _(fairseq2 registry)_ | Custom URL for the model checkpoint (see [Airgap / self-hosted S3](#airgap--self-hosted-s3)) |
+| `MODEL_TOKENIZER_URL` | _(fairseq2 registry)_ | Custom URL for the model tokenizer (see [Airgap / self-hosted S3](#airgap--self-hosted-s3)) |
 | `OMNILINGUAL_PORT` | `8080` | Server port |
 | `OMNILINGUAL_HOST` | `0.0.0.0` | Server host |
 
@@ -144,25 +145,22 @@ See the [openai_client.py](scripts/openai_client.py) code. It's pretty straightf
 
 See [Omnilingual-ASR's GitHub page](https://github.com/facebookresearch/omnilingual-asr/tree/main?tab=readme-ov-file#model-architectures) for a list of available models.
 
-You can specify the model either at build time or at runtime:
-
-**At build time (recommended):**
+The Docker image ships **without model weights**. Weights are downloaded on the first startup and cached in `FAIRSEQ2_CACHE_DIR` (`/models/fairseq2/assets` inside the container). Subsequent starts load from that cache.
 
 ```bash
-# Build with a specific model
-MODEL_NAME=omniASR_LLM_1B_v2 bash build.sh
-
-# Then run the container
-docker run --gpus all -p 8080:8080 omniasr-server:cu126-pt280-llm-1b-v2
-```
-
-**At runtime:**
-
-```bash
-# Run with a different model (model will be downloaded on first run)
+# Run — model is downloaded on first start
 docker run --gpus all -p 8080:8080 \
   -e MODEL_NAME=omniASR_CTC_1B_v2 \
-  omniasr-server
+  omniasr-server:cu126-pt280
+```
+
+Persist the cache across restarts with a volume mount:
+
+```bash
+docker run --gpus all -p 8080:8080 \
+  -e MODEL_NAME=omniASR_CTC_1B_v2 \
+  -v /path/to/model-cache:/models/fairseq2/assets \
+  omniasr-server:cu126-pt280
 ```
 
 **When running locally:**
@@ -171,7 +169,24 @@ docker run --gpus all -p 8080:8080 \
 MODEL_NAME=omniASR_CTC_1B_v2 uv run python main.py
 ```
 
-**NOTE:** When running locally, on the first run, `fairseq` will download the weights and cache it to your device. Subsequent runs only loads the cached weights.
+On the first run fairseq2 downloads the weights and caches them. Subsequent runs load from the cache.
+
+### Airgap / self-hosted S3
+
+In environments where the default fairseq2 CDN (`dl.fbaipublicfiles.com`) is unreachable, provide direct download URLs via environment variables:
+
+```bash
+docker run --gpus all -p 8080:8080 \
+  -e MODEL_NAME=omniASR_CTC_300M_v2 \
+  -e MODEL_CHECKPOINT_URL=https://s3.internal/models/omniASR_CTC_300M_v2/checkpoint.pt \
+  -e MODEL_TOKENIZER_URL=https://s3.internal/models/tokenizer.model \
+  omniasr-server:cu126-pt280
+```
+
+- `MODEL_CHECKPOINT_URL` — direct HTTPS (or S3) URL for the model checkpoint.
+- `MODEL_TOKENIZER_URL` — direct HTTPS (or S3) URL for the SentencePiece tokenizer. Required only when the tokenizer CDN URL is also unreachable.
+
+Both variables are optional. If omitted, fairseq2 falls back to its default registry URLs.
 
 ## Endpoints
 

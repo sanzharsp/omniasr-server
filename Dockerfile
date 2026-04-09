@@ -1,5 +1,3 @@
-ARG MODEL_NAME
-
 # Builder stage - has build tools
 FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04 AS builder
 
@@ -44,17 +42,11 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/pyproject.toml /app/
 
-ARG MODEL_NAME
 ENV FAIRSEQ2_CACHE_DIR=/models/fairseq2/assets
-ENV MODEL_NAME=${MODEL_NAME}
 
 COPY app/ app/
 COPY main.py main.py
 COPY scripts/ scripts/
-
-# Pre-download model to cache during build
-RUN uv run --no-dev scripts/preload.py \
-    && chmod -R a+rX /models
 
 EXPOSE 8080
 

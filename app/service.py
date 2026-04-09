@@ -91,7 +91,10 @@ asr_service = OmnilingualASRService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI lifespan handler - load model on startup."""
+    """FastAPI lifespan handler - download weights then load model on startup."""
 
+    from app.downloader import ensure_model_available
+
+    ensure_model_available()
     asr_service.load_model()
     yield
