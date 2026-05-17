@@ -1,0 +1,197 @@
+name: Docker CI/CD
+
+on:
+  push:
+    branches: ["dev"]
+
+# Serialize deploys on the single self-hosted host (two pushes in a row would
+# otherwise race each other on the same machine).
+concurrency:
+  group: docker-cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: mangisoz
+
+    outputs:
+      build_start_time: ${{ steps.record_build_start_time.outputs.build_start_time }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Record build start time
+        id: record_build_start_time
+        run: echo "build_start_time=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      # 🔔 Build started (Telegram)
+      - name: Telegram — build started
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          COMMIT_MSG_RAW="${{ github.event.head_commit.message }}"
+          COMMIT_MSG_ESCAPED="$(printf '%s' "$COMMIT_MSG_RAW" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ vars.TELEGRAM_CHAT_ID }}" \
+            -d "parse_mode=HTML" \
+            --data-urlencode "text=<b>🚀 Build started</b>
+            <b>Repo:</b> <code>${{ github.repository }}</code>
+            <b>Branch:</b> <code>${{ github.ref_name }}</code>
+            <b>Actor:</b> <code>${{ github.actor }}</code>
+            <b>Run:</b> <a href='${RUN_URL}'>view logs</a>
+            <b>Commit:</b>
+            <code>${COMMIT_MSG_ESCAPED}</code>"
+
+      - name: Enable BuildKit
+        run: |
+          echo "DOCKER_BUILDKIT=1" >> "$GITHUB_ENV"
+          echo "COMPOSE_DOCKER_CLI_BUILD=1" >> "$GITHUB_ENV"
+
+      - name: Create .env from GitHub Secrets/Vars
+        run: |
+          # Runtime defaults come from .env.example (single source of keys);
+          # only production secrets/overrides are injected on top.
+          cp .env.example .env
+          {
+            echo ""
+            echo "# ---- injected by CI/CD ----"
+            echo "OMNILINGUAL_API_KEY=${{ secrets.OMNILINGUAL_API_KEY }}"
+            echo "OMNILINGUAL_LID_TOKEN=${{ secrets.OMNILINGUAL_LID_TOKEN }}"
+            echo "OMNILINGUAL_LID_URL=${{ vars.OMNILINGUAL_LID_URL }}"
+            echo "OMNILINGUAL_DEVICE=${{ vars.OMNILINGUAL_DEVICE || 'cuda' }}"
+            echo "OMNILINGUAL_PORT=${{ vars.OMNILINGUAL_PORT || '8081' }}"
+            # Add further prod secrets/overrides here — the only place to edit.
+          } >> .env
+          echo "------ .env (masked) ------"
+          sed -E 's/(TOKEN|KEY|PASSWORD|SECRET)=.*/\1=****/' .env
+
+      - name: Compose build (local image, with cache)
+        run: |
+          sudo docker compose \
+            -f docker-compose.prod.yml \
+            --progress=plain \
+            build --pull
+
+      # 🔔 Build failed (Telegram)
+      - name: Telegram — build failed
+        if: failure()
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ vars.TELEGRAM_CHAT_ID }}" \
+            -d "parse_mode=HTML" \
+            --data-urlencode "text=<b>❌ Build failed</b>
+              <b>Repo:</b> <code>${{ github.repository }}</code>
+              <b>Branch:</b> <code>${{ github.ref_name }}</code>
+              <b>Run:</b> <a href='${RUN_URL}'>view logs</a>"
+
+  deploy:
+    runs-on: mangisoz
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 🔔 Deploy started (Telegram)
+      - name: Telegram — deploy started
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ vars.TELEGRAM_CHAT_ID }}" \
+            -d "parse_mode=HTML" \
+            --data-urlencode "text=<b>🚀 Deploy started</b>
+              <b>Project:</b> <code>${{ vars.PROJECT_NAME || 'omniasr-server' }}</code>
+              <b>Run:</b> <a href='${RUN_URL}'>view logs</a>"
+
+      - name: Create .env from GitHub Secrets/Vars
+        run: |
+          cp .env.example .env
+          {
+            echo ""
+            echo "# ---- injected by CI/CD ----"
+            echo "OMNILINGUAL_API_KEY=${{ secrets.OMNILINGUAL_API_KEY }}"
+            echo "OMNILINGUAL_LID_TOKEN=${{ secrets.OMNILINGUAL_LID_TOKEN }}"
+            echo "OMNILINGUAL_LID_URL=${{ vars.OMNILINGUAL_LID_URL }}"
+            echo "OMNILINGUAL_DEVICE=${{ vars.OMNILINGUAL_DEVICE || 'cuda' }}"
+            echo "OMNILINGUAL_PORT=${{ vars.OMNILINGUAL_PORT || '8081' }}"
+          } >> .env
+          echo "------ .env (masked) ------"
+          sed -E 's/(TOKEN|KEY|PASSWORD|SECRET)=.*/\1=****/' .env
+
+      - name: Start stack (seamless recreate, no down)
+        run: |
+          # No `compose down` — seamless update. Ensure network/services exist
+          # without rebuilding, then force-recreate only the API container with
+          # the freshly built image.
+          sudo docker compose \
+            -f docker-compose.prod.yml \
+            --env-file .env \
+            up -d --no-build
+
+          sudo docker compose \
+            -f docker-compose.prod.yml \
+            --env-file .env \
+            up -d --no-deps --force-recreate --remove-orphans omniasr
+
+      # Health gate — don't report success on a crash-looping container.
+      # (The one safety step kept from the stricter design; remove if undesired.)
+      - name: Wait for /readyz
+        run: |
+          PORT="${{ vars.OMNILINGUAL_PORT || '8081' }}"
+          for i in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:${PORT}/readyz" >/dev/null 2>&1; then
+              echo "Service is ready."; exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::/readyz never came up in 5min"
+          sudo docker compose -f docker-compose.prod.yml logs --tail=200 omniasr || true
+          exit 1
+
+      - name: Show status
+        if: always()
+        run: |
+          sudo docker compose -f docker-compose.prod.yml ps
+          sudo docker logs omniasr-server --tail=50 || true
+
+      - name: Light cleanup
+        if: always()
+        run: |
+          # Clean old stuff, but don't nuke build caches every deploy.
+          sudo docker image prune -af --filter "until=168h" || true
+          sudo docker builder prune -af --filter "until=168h" || true
+
+      - name: Compute total time
+        if: always()
+        id: compute_time
+        run: |
+          END_TIME=$(date +%s)
+          START_TIME=${{ needs.build.outputs.build_start_time }}
+          echo "build_time=$(( END_TIME - START_TIME ))" >> "$GITHUB_OUTPUT"
+
+      # 🔔 Deploy success (Telegram)
+      - name: Telegram — success
+        if: success()
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ vars.TELEGRAM_CHAT_ID }}" \
+            -d "parse_mode=HTML" \
+            --data-urlencode "text=<b>✅ Deploy finished successfully</b>
+              <b>📦 Project:</b> <code>${{ vars.PROJECT_NAME || 'omniasr-server' }}</code>
+              <b>⏱️ Total build+deploy time:</b> <code>${{ steps.compute_time.outputs.build_time }} s</code>
+              <b>Run:</b> <a href='${RUN_URL}'>view logs</a>"
+
+      # 🔔 Deploy failed (Telegram)
+      - name: Telegram — failure
+        if: failure()
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ vars.TELEGRAM_CHAT_ID }}" \
+            -d "parse_mode=HTML" \
+            --data-urlencode "text=<b>❌ Deploy failed</b>
+            <b>📦 Project:</b> <code>${{ vars.PROJECT_NAME || 'omniasr-server' }}</code>
+            <b>⏱️ Elapsed time:</b> <code>${{ steps.compute_time.outputs.build_time }} s</code>
+            <b>Run:</b> <a href='${RUN_URL}'>view logs</a>"

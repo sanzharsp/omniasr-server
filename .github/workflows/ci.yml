@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to keep the pipeline fast.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        # Tests only need the pure-Python deps + dev tools. The heavy CUDA /
+        # fairseq2 stack runs inside the Docker image, not in CI.
+        run: |
+          uv venv
+          uv pip install pytest httpx ruff
+
+      - name: Lint
+        run: uv run ruff check app tests || true   # informational on first run
+
+      - name: Run pytest (lightweight tests only)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        # Tests that import torch / fairseq2 require GPU runners; skip on
+        # CI for now. Audio chunking + LID smoothing tests are pure logic.
+        run: |
+          uv pip install numpy torch --index-strategy unsafe-best-match || true
+          uv run pytest tests/test_lid.py tests/test_languages.py -v
+
+# Image build/deploy is NOT done here. It runs locally on the self-hosted
+# runner via .github/workflows/cd.yml (no registry / GHCR).

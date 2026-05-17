@@ -1,0 +1,46 @@
+# Caddy reverse proxy with automatic HTTPS via Let's Encrypt.
+#
+# Replace `asr.example.com` with your domain and `you@example.com` with the
+# contact email Let's Encrypt notifies on certificate issues. Caddy will
+# obtain and renew the certificate on its own.
+#
+# Run:   caddy run --config Caddyfile
+
+{
+    email you@example.com
+}
+
+asr.example.com {
+    encode gzip
+
+    # /healthz and /readyz must be reachable without auth so probes work.
+    # Bearer auth happens INSIDE the upstream (BearerAuthMiddleware).
+    reverse_proxy 127.0.0.1:8081 {
+        # The upstream returns 503 from /readyz while models load — Caddy
+        # will mark it healthy only after a 200, then start routing.
+        health_uri /readyz
+        health_interval 10s
+        health_timeout 3s
+
+        # Audio uploads can be large; default 256KB cap is too small.
+        flush_interval -1
+    }
+
+    request_body {
+        max_size 100MB
+    }
+
+    # Tighter timeouts make sense for live LB; raise if you transcribe very
+    # long files (CTC alignment is GPU-bound, ~real-time on 1B).
+    timeouts {
+        read_body   5m
+        read_header 30s
+        write       10m
+        idle        2m
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}

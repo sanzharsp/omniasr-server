@@ -14,6 +14,52 @@ class TranscriptionResponse(BaseModel):
     text: str = Field(..., description="The transcribed text")
 
 
+class TranscriptionWordResponse(BaseModel):
+    """Approximate word-level timestamp information."""
+
+    word: str = Field(..., description="The recognized word token")
+    start: float = Field(..., description="Approximate word start time in seconds")
+    end: float = Field(..., description="Approximate word end time in seconds")
+    language: str | None = Field(
+        None,
+        description="Detected language of the parent chunk (if LID enabled)",
+    )
+
+
+class TranscriptionSegmentResponse(BaseModel):
+    """Speech-aware transcript segment with timing metadata."""
+
+    id: int = Field(..., description="Zero-based segment index")
+    start: float = Field(..., description="Segment start time in seconds")
+    end: float = Field(..., description="Segment end time in seconds")
+    text: str = Field(..., description="Recognized text for the segment")
+    language: str | None = Field(
+        None,
+        description="Detected language of this segment (if LID enabled)",
+    )
+    words: list[TranscriptionWordResponse] | None = Field(
+        None,
+        description="Approximate word timestamps within this segment",
+    )
+
+
+class VerboseTranscriptionResponse(BaseModel):
+    """Verbose transcription response similar to Whisper/OpenAI verbose_json."""
+
+    task: str = Field("transcribe", description="The executed task")
+    language: str | None = Field(None, description="Language hint used for decoding")
+    duration: float = Field(..., description="Decoded audio duration in seconds")
+    text: str = Field(..., description="The stitched transcript")
+    words: list[TranscriptionWordResponse] | None = Field(
+        None,
+        description="Approximate word timestamps across the full transcript",
+    )
+    segments: list[TranscriptionSegmentResponse] = Field(
+        ...,
+        description="Speech-aware transcript segments",
+    )
+
+
 class ErrorResponse(BaseModel):
     """Error response format matching OpenAI's error schema."""
 

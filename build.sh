@@ -7,9 +7,13 @@
 #
 # Environment Variables:
 #
-#   MODEL_NAME    - Name of the model to build (default: omniASR_LLM_300M_v2)
-#                   The model name is used to generate the image tag suffix.
+#   MODEL_NAME    - Name of the standard model to build (default: value from .env,
+#                   otherwise omniASR_LLM_300M_v2)
 #                   Example: omniASR_LLM_1B_v2
+#
+#   ZERO_SHOT_MODEL_NAME
+#                 - Optional zero-shot model to include in the image preload.
+#                   Example: omniASR_LLM_7B_ZS
 #
 #   NAMESPACE     - Namespace/registry prefix for the image name (optional)
 #                   If provided, images will be tagged as NAMESPACE/omniasr-server
@@ -30,6 +34,9 @@
 #   # Build with another variant model name
 #   MODEL_NAME=omniASR_LLM_1B_v2 bash build.sh
 #
+#   # Build with a dedicated zero-shot model preloaded too
+#   MODEL_NAME=omniASR_CTC_300M_v2 ZERO_SHOT_MODEL_NAME=omniASR_LLM_7B_ZS bash build.sh
+#
 #   # Build and tag as latest
 #   LATEST_TAG=true bash build.sh
 #
@@ -47,14 +54,45 @@
 #
 
 
+load_dotenv() {
+    local env_file="${1:-.env}"
+
+    [ -f "$env_file" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ""|\#*)
+                continue
+                ;;
+        esac
+
+        local key="${line%%=*}"
+        local value="${line#*=}"
+
+        if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            continue
+        fi
+
+        if [ -z "${!key+x}" ]; then
+            export "$key=$value"
+        fi
+    done < "$env_file"
+}
+
+load_dotenv .env
+
 MODEL_NAME=${MODEL_NAME:-omniASR_LLM_300M_v2}
-BASE_TAG=cu126-pt280
+ZERO_SHOT_MODEL_NAME=${ZERO_SHOT_MODEL_NAME:-}
+BASE_TAG=cu128-pt280
 
 # Convert model name to tag suffix, e.g.:
 #     omniASR_LLM_300M_v2 -> llm-300m-v2
 #     omniASR_CTC_300M_v2 -> ctc-300m-v2
 #     omniASR_LLM_Unlimited_300M_v2 -> llm-unlimited-300m-v2
-TAG_SUFFIX=$(echo $MODEL_NAME | sed 's/^omniASR_//' | tr 'A-Z_' 'a-z-')
+TAG_SUFFIX=$(echo "$MODEL_NAME" | sed 's/^omniASR_//' | tr 'A-Z_' 'a-z-')
+if [ -n "$ZERO_SHOT_MODEL_NAME" ]; then
+    TAG_SUFFIX="$TAG_SUFFIX-with-zs"
+fi
 
 # Build image name with optional namespace
 if [ -n "$NAMESPACE" ]; then
@@ -75,6 +113,7 @@ fi
 BUILD_CMD="docker buildx build \
     --platform linux/amd64 \
     --build-arg MODEL_NAME=$MODEL_NAME \
+    --build-arg ZERO_SHOT_MODEL_NAME=$ZERO_SHOT_MODEL_NAME \
     $TAGS"
 
 # Optionally push

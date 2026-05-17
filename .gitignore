@@ -8,9 +8,21 @@ wheels/
 
 # Virtual environments
 .venv
+.env
 
 # VSCode settings
 .vscode/settings.json
 
 # Audio files
 harvard.wav
+
+# Model weights — huge (~8.5 GB), baked into the image / mounted at runtime,
+# never committed. NOTE: fairseq2-assets/ is intentionally NOT ignored — the
+# asset cards there are small config and required by the deploy compose.
+models/
+
+# Runtime artifacts produced by the container (compose mounts ./logs)
+logs/
+
+# Local agent / assistant state
+.claude/

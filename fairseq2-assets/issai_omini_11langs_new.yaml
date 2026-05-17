@@ -1,0 +1,3 @@
+name: issai_omini_11langs_new
+base: omniASR_LLM_1B_v2
+checkpoint: file:///home/admin2/programmers/omniasr-server/models/issai-omini/11langs_new/model

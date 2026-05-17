@@ -1,0 +1,50 @@
+services:
+  omniasr:
+    # Built locally on the deploy runner (no registry) via `docker compose
+    # build`. `image:` is the local tag the build is stamped with and that
+    # `up -d` then runs.
+    build:
+      context: .
+      args:
+        MODEL_NAME: ${MODEL_NAME:-omniASR_LLM_1B_v2}
+        ALIGNMENT_MODEL_NAME: ${ALIGNMENT_MODEL_NAME:-omniASR_CTC_1B_v2}
+    image: omniasr-server:${IMAGE_TAG:-latest}
+    container_name: omniasr-server
+    restart: always
+    env_file:
+      - .env
+    environment:
+      FAIRSEQ2_USER_ASSET_DIR: /app/fairseq2-assets
+      OMNILINGUAL_HOST: 0.0.0.0
+      LOG_FORMAT: json
+    ports:
+      - "127.0.0.1:${OMNILINGUAL_PORT:-8081}:8081"
+    volumes:
+      # Custom asset cards (issai_omini_*) and any user model weights are
+      # mounted read-only from the host. Built-in models live inside the
+      # image (preloaded during build).
+      - /home/admin2/programmers/omniasr-server/models:/home/admin2/programmers/omniasr-server/models:ro
+      - ./fairseq2-assets:/app/fairseq2-assets:ro
+      - ./logs:/app/logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+        # Hard ceilings so a runaway model load doesn't take the host down.
+        # Tune per VM — these match a single 24GB GPU server.
+        limits:
+          memory: 24G
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 180s
+      retries: 3
